@@ -63,6 +63,18 @@ button,input,select,textarea{font-family:inherit}
 .set-grid input:focus{border-color:var(--teal)}
 .set-actions{display:flex; gap:9px; margin-top:14px; flex-wrap:wrap}
 .bk-hint{font-size:12.5px; color:var(--muted); font-weight:600; margin-bottom:10px; line-height:1.7}
+/* price lists panel */
+.pl-list{display:flex; flex-direction:column; gap:8px; margin-top:12px}
+.pl-row{display:flex; align-items:center; gap:12px; background:#fff; border:1px solid var(--line);
+  border-radius:11px; padding:10px 14px; font-size:13px; font-weight:700}
+.pl-row.on{border-color:var(--teal); background:#f0fdfd}
+.pl-row input[type=radio]{width:17px; height:17px; accent-color:var(--teal-2); cursor:pointer}
+.pl-row b{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.pl-row .pl-n{color:var(--teal-2); white-space:nowrap}
+.pl-row .pl-d{color:var(--muted); font-weight:600; white-space:nowrap}
+.pl-row button{border:0; cursor:pointer}
+.pl-chip{background:var(--teal-2); max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.pl-apply{padding:6px 12px; font-size:12px; border-radius:10px}
 
 /* columns panel */
 .col-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:10px 14px}

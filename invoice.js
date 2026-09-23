@@ -18,6 +18,7 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const num = (v) => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
 const money = (n) => num(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const normCode = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 /* ---------- I18N (commercial terms) ---------- */
 const I18N = {
@@ -52,6 +53,15 @@ const I18N = {
     tSub: 'Subtotal', tFreight: 'Freight', tVat: 'VAT %', tNet: 'NET TOTAL',
     discPct: 'Discount % (for Price in USD)', usdRate: 'USD Rate (EGP per $)',
     convHint: 'Price in USD = (Price EGP × (1 − Discount%)) ÷ USD Rate — computed only when the invoice currency is EGP; otherwise “—”.',
+    plChip: 'List:', plTitle: 'Price Lists',
+    plT: 'Price lists (Item Code + Price) — prices auto-fill when adding items',
+    plHint: 'Upload any Excel sheet whose header row contains an “Item Code” and a “Price / Price Per Carton” column (the KRNO export sheet reads as-is). Auto-filled prices stay fully editable, and the catalog is never touched.',
+    plUpload: '⬆ Upload price list (.xlsx)', plApplyBtn: '⇩ Apply prices to invoice',
+    plPrices: 'prices',
+    plLoaded: 'Price list loaded: {n} prices', plNone: 'Could not find Item Code / Price columns in this file',
+    plErr: 'Could not read the file — make sure it is .xlsx', plNoActive: 'No active price list selected',
+    plApplied: 'Prices applied to {n} items', plNoMatch: 'No invoice item matches this list',
+    plEmpty: 'No lists yet — upload a sheet with Item Code + Price columns', plDelQ: 'Delete this price list?',
     notes: 'Invoice notes (shown in print)', notesPh: 'Extra notes for the customer…',
     bankT: 'Invoice terms & bank (shown at the bottom of the printed invoice — editable)',
     foot: 'Draft auto-saves on this device · KRNO Sales Tools · v2026',
@@ -99,6 +109,15 @@ const I18N = {
     tSub: 'الإجمالي قبل الشحن والضريبة', tFreight: 'الشحن', tVat: 'الضريبة %', tNet: 'صافي الفاتورة',
     discPct: 'نسبة الخصم % (لعمود السعر بالدولار)', usdRate: 'سعر الدولار (ج.م لكل $)',
     convHint: 'السعر بالدولار = (السعر بالجنيه × (1 − نسبة الخصم)) ÷ سعر الدولار — بتتحسب فقط لما عملة الفاتورة جنيه مصري؛ وإلا بتظهر «—».',
+    plChip: 'قائمة:', plTitle: 'قوائم الأسعار',
+    plT: 'قوائم أسعار (كود الصنف + السعر) — السعر بيتحط تلقائي عند إضافة أي صنف',
+    plHint: 'ارفع أي شيت Excel فيه صف عناوين بأعمدة «Item Code» و«Price / Price Per Carton» (شيت التصدير بتاعكم بيتقري زي ما هو). الأسعار اللي بتنزل تلقائي بتفضل قابلة للتعديل، ومفيش أي مساس ببيانات الكتالوج.',
+    plUpload: '⬆ رفع قائمة أسعار (.xlsx)', plApplyBtn: '⇩ تطبيق الأسعار على الفاتورة',
+    plPrices: 'سعر',
+    plLoaded: 'القائمة اتحمّلت: {n} سعر', plNone: 'مش لاقي أعمدة كود الصنف والسعر في الملف ده',
+    plErr: 'ملف مش مقدور عليه — اتأكد إنه xlsx', plNoActive: 'مفيش قائمة أسعار مفعّلة',
+    plApplied: 'تم تحديث أسعار {n} صنف', plNoMatch: 'ولا صنف في الفاتورة مطابق للقائمة دي',
+    plEmpty: 'مفيش قوائم لسه — ارفع شيت فيه عمود كود الصنف وعمود السعر', plDelQ: 'تمسح قائمة الأسعار دي؟',
     notes: 'ملاحظات الفاتورة (تظهر في الطباعة)', notesPh: 'ملاحظات إضافية للعميل…',
     bankT: 'شروط الفاتورة والبنك (تظهر أسفل الفاتورة المطبوعة — قابلة للتعديل)',
     foot: 'مسودة الفاتورة بتتحفظ تلقائيًا على الجهاز · KRNO Sales Tools · v2026',
@@ -264,6 +283,139 @@ function totals() {
   return { boxes, pcs, netKg: autoKg(), sub, freight, vat, vatPct, net, cur: $('#mCur').value };
 }
 
+/* ---------- price lists (upload .xlsx — auto prices, visual layer only) ---------- */
+const PLISTS_KEY = 'krno_inv_pricelists';
+const PACTIVE_KEY = 'krno_inv_plist';
+function loadPLists() {
+  try { const l = JSON.parse(localStorage.getItem(PLISTS_KEY) || '{}');
+    return (l && typeof l === 'object' && !Array.isArray(l)) ? l : {}; }
+  catch (e) { return {}; }
+}
+function savePLists(o) { localStorage.setItem(PLISTS_KEY, JSON.stringify(o)); }
+let PLISTS = loadPLists();
+let PLIST = localStorage.getItem(PACTIVE_KEY) || '';
+if (!PLISTS[PLIST]) PLIST = Object.keys(PLISTS)[0] || '';
+const CODE_SET = new Set(PRODUCTS.map((x) => normCode(x.code)));
+function priceForItem(code) {
+  const l = PLISTS[PLIST]; if (!l || !code) return 0;
+  const p = l.prices[normCode(code)];
+  return (typeof p === 'number' && p > 0) ? p : 0;
+}
+const cellText = (v) => {
+  if (v == null) return '';
+  if (typeof v === 'object') {
+    if (v.richText) return v.richText.map((t) => t.text || '').join('');
+    if (v.result != null) return String(v.result);
+    if (v.text != null) return String(v.text);
+    return '';
+  }
+  return String(v);
+};
+function extractPrices(ws) {
+  const rows = [];
+  ws.eachRow({ includeEmpty: false }, (row, rn) => {
+    if (rn > 3000) return;
+    const cells = [];
+    row.eachCell({ includeEmpty: true }, (c, cn) => { cells[cn] = c.value; });
+    rows.push({ rn, cells });
+  });
+  const map = {};
+  const put = (code, price) => {
+    const k = normCode(cellText(code));
+    let p = price;
+    if (p && typeof p === 'object' && typeof p.result === 'number') p = p.result;
+    if (typeof p !== 'number') p = parseFloat(String(p == null ? '' : p).replace(/[^0-9.\-]/g, ''));
+    if (k && isFinite(p) && p > 0 && p < 1e7 && k.length > 1) map[k] = p;
+  };
+  let hRn = -1, codeCol = 0, priceCol = 0;
+  for (const r of rows.slice(0, 30)) {
+    let c1 = 0, c2 = 0;
+    for (let i = 1; i < r.cells.length; i++) {
+      const t = cellText(r.cells[i]).replace(/\s+/g, ' ').toLowerCase().trim();
+      if (!t) continue;
+      if (!c1 && /(item code|product code|part no|\bcode\b|كود)/.test(t)) c1 = i;
+      if (!c2 && /(price per carton|price\/carton|carton price|usd per carton|usd\/carton|price|سعر)/.test(t) && !/value|total|إجمالي|40ft/.test(t)) c2 = i;
+    }
+    if (c1 && c2) { hRn = r.rn; codeCol = c1; priceCol = c2; break; }
+  }
+  if (hRn > 0) {
+    for (const r of rows) {
+      if (r.rn <= hRn) continue;
+      if (/^\s*total/i.test(cellText(r.cells[1]))) break;
+      put(r.cells[codeCol], r.cells[priceCol]);
+    }
+  } else {
+    for (const r of rows) {
+      let cIdx = 0;
+      for (let i = 1; i < r.cells.length; i++) if (CODE_SET.has(normCode(cellText(r.cells[i])))) { cIdx = i; break; }
+      if (!cIdx) continue;
+      for (let i = 1; i < r.cells.length; i++) {
+        if (i === cIdx) continue;
+        const n = parseFloat(cellText(r.cells[i]));
+        if (isFinite(n) && n > 0) { put(r.cells[cIdx], n); break; }
+      }
+    }
+  }
+  return map;
+}
+async function importPListBytes(buf, name) {
+  if (!window.ExcelJS) { toastMsg(T('plErr')); return 0; }
+  try {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf);
+    const ws = wb.worksheets && wb.worksheets[0];
+    const prices = ws ? extractPrices(ws) : {};
+    const cnt = Object.keys(prices).length;
+    if (!cnt) { toastMsg(T('plNone')); return 0; }
+    PLISTS[name] = { at: new Date().toISOString(), prices };
+    savePLists(PLISTS);
+    if (!PLIST || !PLISTS[PLIST]) setPActive(name);
+    else { renderPListPanel(); refreshPlChip(); }
+    toastMsg(T('plLoaded').replace('{n}', cnt));
+    return cnt;
+  } catch (e) { toastMsg(T('plErr')); return 0; }
+}
+function importPListFile(file) {
+  const done = (buf) => {
+    const name = (file.name || '').replace(/\.[^.]+$/, '') || ('LIST-' + Date.now());
+    return importPListBytes(buf, name);
+  };
+  if (file.arrayBuffer) file.arrayBuffer().then(done);
+  else { const rd = new FileReader(); rd.onload = () => done(rd.result); rd.readAsArrayBuffer(file); }
+}
+function setPActive(name) {
+  PLIST = name || '';
+  localStorage.setItem(PACTIVE_KEY, PLIST);
+  renderPListPanel(); refreshPlChip(); saveDraft();
+}
+function applyPListToInvoice() {
+  if (!PLIST || !PLISTS[PLIST]) { toastMsg(T('plNoActive')); return; }
+  let n = 0;
+  items.forEach((it) => { const p = priceForItem(it.code); if (p > 0) { it.price = p; n++; } });
+  renderItems(); saveDraft();
+  toastMsg(n ? T('plApplied').replace('{n}', n) : T('plNoMatch'));
+}
+function renderPListPanel() {
+  const el = $('#plList'); if (!el) return;
+  const names = Object.keys(PLISTS);
+  el.innerHTML = names.length ? names.map((nm) => {
+    const l = PLISTS[nm]; const n = Object.keys(l.prices || {}).length;
+    return `<div class="pl-row ${nm === PLIST ? 'on' : ''}">
+      <input type="radio" name="pluse" data-nm="${esc(nm)}" ${nm === PLIST ? 'checked' : ''}>
+      <b dir="auto">${esc(nm)}</b>
+      <span class="pl-n">${n} ${esc(T('plPrices'))}</span>
+      <span class="pl-d">${esc(l.at ? String(l.at).slice(0, 10) : '')}</span>
+      <button class="btn danger" data-del="${esc(nm)}">${esc(T('delH'))}</button>
+    </div>`;
+  }).join('') : `<p class="empty-it">${esc(T('plEmpty'))}</p>`;
+}
+function refreshPlChip() {
+  const chip = $('#plChip'), btn = $('#btnPlApply');
+  if (PLIST && PLISTS[PLIST]) {
+    chip.hidden = false; chip.textContent = T('plChip') + ' ' + PLIST; btn.hidden = false;
+  } else { chip.hidden = true; btn.hidden = true; }
+}
+
 /* ---------- gate ---------- */
 function initGate() {
   if (sessionStorage.getItem('krno_staff') === '1') { $('#gate').hidden = true; $('#app').hidden = false; return; }
@@ -293,6 +445,8 @@ function applyLang() {
   renderTotsList();
   renderHistory();
   applyTotVis();
+  renderPListPanel();
+  refreshPlChip();
 }
 
 /* ---------- picker ---------- */
@@ -328,7 +482,7 @@ function addItemFromCatalog(p) {
   items.push({
     id: p.id, desc: p.title, code: p.code,
     weight: specWeight(p), pcs: pk.pcs, dims: pk.dims,
-    cbm: pk.cbm, boxes: 1, price: 0, q40: q40Of(pk.cbm),
+    cbm: pk.cbm, boxes: 1, price: priceForItem(p.code), q40: q40Of(pk.cbm),
   });
   renderItems(); saveDraft();
 }
@@ -444,6 +598,7 @@ function backupData() {
       lang: LANG,
       cols: colVis,
       tots: totVis,
+      plists: PLISTS, plist: PLIST,
     },
   };
 }
@@ -463,6 +618,10 @@ function applyBackup(obj) {
   colVis = Object.assign({}, colVis, d.cols || {});
   localStorage.setItem(COLS_KEY, JSON.stringify(colVis));
   if (d.tots) setTotVis(d.tots, true);
+  PLISTS = (d.plists && typeof d.plists === 'object') ? d.plists : {};
+  savePLists(PLISTS);
+  PLIST = (d.plist && PLISTS[d.plist]) ? d.plist : (Object.keys(PLISTS)[0] || '');
+  localStorage.setItem(PACTIVE_KEY, PLIST);
   LANG = (d.lang === 'ar' || d.lang === 'en') ? d.lang : 'en';
   localStorage.setItem(LANG_KEY, LANG);
   applyLang(); initBankForm(); renderFromBox(); applyColVis();
@@ -784,6 +943,14 @@ function bind() {
     const i = +inp.closest('tr').dataset.i, f = inp.dataset.f;
     const isNum = ['pcs', 'cbm', 'boxes', 'price', 'q40'].includes(f);
     items[i][f] = isNum ? num(inp.value) : inp.value;
+    if (f === 'code' && !(items[i].price > 0)) {
+      const mp = priceForItem(inp.value);
+      if (mp > 0) {
+        items[i].price = mp;
+        const pinp = inp.closest('tr').querySelector('input[data-f="price"]');
+        if (pinp) pinp.value = mp;
+      }
+    }
     if (f === 'cbm') {
       items[i].q40 = q40Of(inp.value);
       inp.closest('tr').querySelector('input[data-f="q40"]').value = items[i].q40;
@@ -808,6 +975,19 @@ function bind() {
     localStorage.setItem(COLS_KEY, JSON.stringify(colVis));
     applyColVis();
   };
+  $('#btnPl').onclick = () => { renderPListPanel(); $('#plPanel').hidden = !$('#plPanel').hidden; };
+  $('#btnPlClose').onclick = () => { $('#plPanel').hidden = true; };
+  $('#plFile').onchange = (e) => { const f = e.target.files && e.target.files[0]; if (f) importPListFile(f); e.target.value = ''; };
+  $('#plList').onchange = (e) => { const r = e.target.closest('input[name="pluse"]'); if (r) setPActive(r.dataset.nm); };
+  $('#plList').onclick = (e) => {
+    const d = e.target.closest('[data-del]'); if (!d) return;
+    if (!confirm(T('plDelQ'))) return;
+    const nm = d.dataset.del; delete PLISTS[nm];
+    if (PLIST === nm) PLIST = Object.keys(PLISTS)[0] || '';
+    savePLists(PLISTS); localStorage.setItem(PACTIVE_KEY, PLIST);
+    renderPListPanel(); refreshPlChip(); saveDraft();
+  };
+  $('#btnPlApply').onclick = applyPListToInvoice;
   $('#btnTots').onclick = () => { renderTotsList(); $('#totsPanel').hidden = !$('#totsPanel').hidden; };
   $('#totsClose').onclick = () => { $('#totsPanel').hidden = true; };
   $('#totsList').onchange = (e) => {
@@ -879,9 +1059,13 @@ initColumns();
 initBankForm();
 renderTotsList();
 applyTotVis();
+renderPListPanel();
+refreshPlChip();
 bind();
 window.__KRNO_INV__ = {
   buildExcel, totals, totalsView, q40Of, discPriceOf, autoKg, exportExcel, saveInvoice, loadHist,
   backupData, applyBackup, search: (q, l) => KS.search(q, l),
+  importPListBytes, applyPListToInvoice, priceForItem, setPActive,
+  plistState: () => ({ PLISTS, PLIST }),
   state: () => ({ items, currentNo, colVis, totVis, LANG }),
 };
